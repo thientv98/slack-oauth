@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: slack-oauth
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /ping
+    envVars:
+      - key: NODE_ENV
+        value: production 

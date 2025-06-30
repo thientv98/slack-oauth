@@ -9,8 +9,8 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static('public'));
 
 // Slack OAuth Configuration
@@ -18,12 +18,26 @@ const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
+// Add request timeout middleware
+app.use((req, res, next) => {
+  res.setTimeout(25000, () => {
+    console.log('Request timeout');
+    res.status(408).send('Request timeout');
+  });
+  next();
+});
+
 // Redirect URLs that you need to configure in your Slack app
 const REDIRECT_URLS = {
   OAUTH_CALLBACK: `${BASE_URL}/slack/oauth/callback`,
   SUCCESS: `${BASE_URL}/success`,
   ERROR: `${BASE_URL}/error`
 };
+
+// Simple ping endpoint for Render health checks
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
 
 // Root route - serves the main page with "Add to Slack" button
 app.get('/', (req, res) => {
@@ -125,31 +139,44 @@ app.get('/', (req, res) => {
 
 // Initiate OAuth flow - redirects to Slack
 app.get('/slack/oauth/authorize', (req, res) => {
+  console.log('OAuth authorization requested');
+  
   if (!SLACK_CLIENT_ID) {
-    return res.status(500).send('Slack Client ID not configured. Please check your environment variables.');
+    console.error('Slack Client ID not configured');
+    return res.status(500).send(`
+      <h1>Configuration Error</h1>
+      <p>Slack Client ID not configured. Please set SLACK_CLIENT_ID environment variable.</p>
+      <a href="/">← Back to Home</a>
+    `);
   }
 
-  const scopes = [
-    'channels:read',
-    'chat:write',
-    'commands',
-    'incoming-webhook',
-    'users:read'
-  ].join(',');
+  try {
+    const scopes = [
+      'channels:read',
+      'chat:write',
+      'commands',
+      'incoming-webhook',
+      'users:read'
+    ].join(',');
 
-  const state = generateRandomState();
-  
-  const authUrl = `https://slack.com/oauth/v2/authorize?` +
-    `client_id=${SLACK_CLIENT_ID}&` +
-    `scope=${encodeURIComponent(scopes)}&` +
-    `redirect_uri=${encodeURIComponent(REDIRECT_URLS.OAUTH_CALLBACK)}&` +
-    `state=${state}`;
+    const state = generateRandomState();
+    
+    const authUrl = `https://slack.com/oauth/v2/authorize?` +
+      `client_id=${SLACK_CLIENT_ID}&` +
+      `scope=${encodeURIComponent(scopes)}&` +
+      `redirect_uri=${encodeURIComponent(REDIRECT_URLS.OAUTH_CALLBACK)}&` +
+      `state=${state}`;
 
-  // Store state in session/memory for validation (in production, use proper session management)
-  req.session = req.session || {};
-  req.session.oauthState = state;
-
-  res.redirect(authUrl);
+    console.log('Redirecting to Slack OAuth URL');
+    res.redirect(authUrl);
+  } catch (error) {
+    console.error('Error in OAuth authorization:', error);
+    res.status(500).send(`
+      <h1>OAuth Error</h1>
+      <p>Error initiating OAuth flow: ${error.message}</p>
+      <a href="/">← Back to Home</a>
+    `);
+  }
 });
 
 // OAuth callback - handles the response from Slack
@@ -167,7 +194,8 @@ app.get('/slack/oauth/callback', async (req, res) => {
   }
 
   try {
-    // Exchange authorization code for access token
+    // Exchange authorization code for access token with timeout
+    console.log('Exchanging OAuth code for token...');
     const tokenResponse = await axios.post('https://slack.com/api/oauth.v2.access', {
       client_id: SLACK_CLIENT_ID,
       client_secret: SLACK_CLIENT_SECRET,
@@ -176,7 +204,8 @@ app.get('/slack/oauth/callback', async (req, res) => {
     }, {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      },
+      timeout: 15000 // 15 second timeout
     });
 
     const { data } = tokenResponse;
@@ -206,7 +235,21 @@ app.get('/slack/oauth/callback', async (req, res) => {
     res.redirect(`${REDIRECT_URLS.SUCCESS}?team=${encodeURIComponent(data.team.name)}`);
 
   } catch (error) {
-    console.error('Error during OAuth callback:', error.message);
+    console.error('Error during OAuth callback:', error);
+    
+    // Handle specific axios timeout errors
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      console.error('Slack API timeout');
+      return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_timeout`);
+    }
+    
+    // Handle axios errors
+    if (error.response) {
+      console.error('Slack API error response:', error.response.data);
+      return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_error`);
+    }
+    
+    console.error('Generic OAuth error:', error.message);
     res.redirect(`${REDIRECT_URLS.ERROR}?error=oauth_failed`);
   }
 });
@@ -323,8 +366,17 @@ app.get('/error', (req, res) => {
   `);
 });
 
-// Health check endpoint
+// Health check endpoint - Simple and fast for Render
 app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// More detailed health check
+app.get('/status', (req, res) => {
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
@@ -349,8 +401,19 @@ app.use((err, req, res, next) => {
   res.status(500).send('Something went wrong!');
 });
 
+// Graceful shutdown handling
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received');
+  process.exit(0);
+});
+
 // Start server
-app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📱 Main URL: ${BASE_URL}`);
   console.log(`🔗 OAuth Callback URL: ${REDIRECT_URLS.OAUTH_CALLBACK}`);
@@ -361,6 +424,17 @@ app.listen(PORT, () => {
   
   if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
     console.log('\n⚠️  Warning: Slack credentials not configured!');
-    console.log('   Please copy env.example to .env and add your Slack app credentials.');
+    console.log('   Please add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET to environment variables.');
   }
-}); 
+  
+  console.log('\n✅ Server ready for connections');
+});
+
+// Handle server errors
+server.on('error', (err) => {
+  console.error('Server error:', err);
+  process.exit(1);
+});
+
+// Set server timeout
+server.timeout = 30000; 

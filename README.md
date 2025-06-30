@@ -132,15 +132,29 @@ The server automatically generates redirect URLs based on your `BASE_URL` enviro
 
 ## 🌐 Deployment
 
-### Heroku
+### Render (Recommended)
 
+**Quick Deploy:**
+1. Connect repository to [Render](https://dashboard.render.com/)
+2. Set environment variables (see DEPLOYMENT.md)
+3. Update Slack app redirect URLs
+
+**Optimizations for Render:**
+- ✅ Fixed timeout issues with proper server binding
+- ✅ Added `/ping` health check endpoint
+- ✅ Optimized startup time and error handling
+
+📖 **See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete Render deployment guide**
+
+### Other Platforms
+
+#### Heroku
 1. Create a new Heroku app
 2. Set environment variables in Heroku config
 3. Update `BASE_URL` to your Heroku app URL
 4. Update redirect URLs in your Slack app settings
 
-### Vercel/Netlify
-
+#### Vercel/Netlify
 1. Deploy the app to your preferred platform
 2. Set environment variables in your platform's settings
 3. Update `BASE_URL` to your deployed URL
@@ -153,14 +167,31 @@ The server automatically generates redirect URLs based on your `BASE_URL` enviro
 1. **"Invalid redirect URI"** - Make sure the redirect URL in your Slack app matches exactly
 2. **"Client ID not configured"** - Check your `.env` file has the correct `SLACK_CLIENT_ID`
 3. **OAuth errors** - Check the `/error` page for specific error messages
+4. **Render deployment timeout** - Fixed with optimized server startup and health checks
 
-### Debug Mode:
-
-Check the `/health` endpoint to verify your configuration:
+### Debug Endpoints:
 
 ```bash
-curl http://localhost:3000/health
+# Quick ping test
+curl https://your-app.onrender.com/ping
+
+# Basic health check
+curl https://your-app.onrender.com/health
+
+# Detailed status
+curl https://your-app.onrender.com/status
 ```
+
+### Render Deployment Issues:
+
+If you're experiencing timeout during Render deployment:
+
+1. ✅ **Server binding fixed** - Now binds to `0.0.0.0` instead of `localhost`
+2. ✅ **Health check optimized** - Added `/ping` endpoint for faster startup detection
+3. ✅ **Error handling improved** - Better logging and timeout handling
+4. ✅ **Graceful shutdown** - Proper signal handling for clean deployment
+
+**Still having issues?** Check [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed troubleshooting guide.
 
 ## 📝 License
 

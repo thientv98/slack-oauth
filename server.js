@@ -2,10 +2,47 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const path = require('path');
+const { Pool } = require('pg');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// PostgreSQL Configuration
+const DATABASE_URL = process.env.DATABASE_URL || '';
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
+// Initialize database table
+async function initializeDatabase() {
+  try {
+    const createTableQuery = `
+      CREATE TABLE IF NOT EXISTS slack_installations (
+        id SERIAL PRIMARY KEY,
+        team_id VARCHAR(255) UNIQUE NOT NULL,
+        team_name VARCHAR(255) NOT NULL,
+        access_token TEXT NOT NULL,
+        bot_user_id VARCHAR(255),
+        scope TEXT,
+        installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    
+    await pool.query(createTableQuery);
+    console.log('✅ Database table initialized successfully');
+  } catch (error) {
+    console.error('❌ Error initializing database:', error);
+  }
+}
+
+// Initialize database on startup
+initializeDatabase();
 
 // Middleware
 app.use(cors());
@@ -219,7 +256,7 @@ app.get('/slack/oauth/callback', async (req, res) => {
       return res.redirect(`${REDIRECT_URLS.ERROR}?error=${encodeURIComponent(data.error)}`);
     }
 
-    // Store the access token and team info (in production, store in database)
+    // Store the access token and team info in database
     const installationData = {
       team_id: data.team.id,
       team_name: data.team.name,
@@ -230,6 +267,34 @@ app.get('/slack/oauth/callback', async (req, res) => {
     };
 
     console.log('Installation data:', installationData);
+
+    // Save to database
+    try {
+      const insertQuery = `
+        INSERT INTO slack_installations (team_id, team_name, access_token, bot_user_id, scope, updated_at)
+        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+        ON CONFLICT (team_id) 
+        DO UPDATE SET 
+          team_name = EXCLUDED.team_name,
+          access_token = EXCLUDED.access_token,
+          bot_user_id = EXCLUDED.bot_user_id,
+          scope = EXCLUDED.scope,
+          updated_at = CURRENT_TIMESTAMP
+      `;
+      
+      await pool.query(insertQuery, [
+        installationData.team_id,
+        installationData.team_name,
+        installationData.access_token,
+        installationData.bot_user_id,
+        installationData.scope
+      ]);
+      
+      console.log('✅ Installation data saved to database successfully');
+    } catch (dbError) {
+      console.error('❌ Error saving installation data to database:', dbError);
+      // Continue with the flow even if DB save fails
+    }
 
     console.log('Slack app installed successfully:', {
       team_name: installationData.team_name,
@@ -395,6 +460,74 @@ app.get('/status', (req, res) => {
   });
 });
 
+// API endpoint to get access token by team ID
+app.get('/api/installations/:team_id', async (req, res) => {
+  const { team_id } = req.params;
+  
+  if (!team_id) {
+    return res.status(400).json({ 
+      error: 'team_id is required',
+      message: 'Please provide a team_id parameter'
+    });
+  }
+
+  try {
+    const query = 'SELECT * FROM slack_installations WHERE team_id = $1';
+    const result = await pool.query(query, [team_id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        error: 'installation_not_found',
+        message: `No installation found for team_id: ${team_id}` 
+      });
+    }
+    
+    const installation = result.rows[0];
+    
+    // Return installation data (excluding sensitive info in logs)
+    res.json({
+      success: true,
+      data: {
+        team_id: installation.team_id,
+        team_name: installation.team_name,
+        access_token: installation.access_token,
+        bot_user_id: installation.bot_user_id,
+        scope: installation.scope,
+        installed_at: installation.installed_at,
+        updated_at: installation.updated_at
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error fetching installation:', error);
+    res.status(500).json({ 
+      error: 'database_error',
+      message: 'Error fetching installation data'
+    });
+  }
+});
+
+// API endpoint to get all installations (for admin purposes)
+app.get('/api/installations', async (req, res) => {
+  try {
+    const query = 'SELECT team_id, team_name, bot_user_id, scope, installed_at, updated_at FROM slack_installations ORDER BY installed_at DESC';
+    const result = await pool.query(query);
+    
+    res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows
+    });
+    
+  } catch (error) {
+    console.error('Error fetching installations:', error);
+    res.status(500).json({ 
+      error: 'database_error',
+      message: 'Error fetching installations data'
+    });
+  }
+});
+
 // Utility function to generate random state for OAuth
 function generateRandomState() {
   return Math.random().toString(36).substring(2, 15) + 
@@ -408,13 +541,25 @@ app.use((err, req, res, next) => {
 });
 
 // Graceful shutdown handling
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('SIGTERM received');
+  try {
+    await pool.end();
+    console.log('Database connection pool closed');
+  } catch (error) {
+    console.error('Error closing database connection:', error);
+  }
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('SIGINT received');
+  try {
+    await pool.end();
+    console.log('Database connection pool closed');
+  } catch (error) {
+    console.error('Error closing database connection:', error);
+  }
   process.exit(0);
 });
 

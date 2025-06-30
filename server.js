@@ -229,6 +229,8 @@ app.get('/slack/oauth/callback', async (req, res) => {
       installed_at: new Date().toISOString()
     };
 
+    console.log('Installation data:', installationData);
+
     console.log('Slack app installed successfully:', {
       team_name: installationData.team_name,
       team_id: installationData.team_id,

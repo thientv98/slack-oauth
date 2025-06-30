@@ -137,6 +137,10 @@ app.get('/', (req, res) => {
   `);
 });
 
+app.get('/cronjob_81925.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'cronjob_81925.html'));
+});
+
 // Initiate OAuth flow - redirects to Slack
 app.get('/slack/oauth/authorize', (req, res) => {
   console.log('OAuth authorization requested');

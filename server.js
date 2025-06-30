@@ -1,0 +1,366 @@
+const express = require('express');
+const axios = require('axios');
+const cors = require('cors');
+const path = require('path');
+require('dotenv').config();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
+
+// Slack OAuth Configuration
+const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
+const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+
+// Redirect URLs that you need to configure in your Slack app
+const REDIRECT_URLS = {
+  OAUTH_CALLBACK: `${BASE_URL}/slack/oauth/callback`,
+  SUCCESS: `${BASE_URL}/success`,
+  ERROR: `${BASE_URL}/error`
+};
+
+// Root route - serves the main page with "Add to Slack" button
+app.get('/', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Slack OAuth Integration</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; 
+                max-width: 800px; 
+                margin: 0 auto; 
+                padding: 20px;
+                background-color: #f8f9fa;
+            }
+            .container {
+                background: white;
+                padding: 40px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                text-align: center;
+            }
+            h1 { color: #333; margin-bottom: 30px; }
+            .slack-button {
+                display: inline-block;
+                background-color: #4A154B;
+                color: white;
+                padding: 12px 24px;
+                text-decoration: none;
+                border-radius: 5px;
+                font-weight: bold;
+                margin: 20px 0;
+                transition: background-color 0.3s;
+            }
+            .slack-button:hover {
+                background-color: #611f69;
+            }
+            .info {
+                background-color: #e8f4f8;
+                padding: 20px;
+                border-radius: 5px;
+                margin: 20px 0;
+                text-align: left;
+            }
+            .url-list {
+                background-color: #f1f1f1;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 10px 0;
+                font-family: monospace;
+                text-align: left;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🚀 Slack OAuth Integration</h1>
+            <p>Click the button below to add this app to your Slack workspace</p>
+            
+            <a href="/slack/oauth/authorize" class="slack-button">
+                Add to Slack
+            </a>
+            
+            <div class="info">
+                <h3>📋 Redirect URLs Configuration</h3>
+                <p>You need to configure these redirect URLs in your Slack app settings:</p>
+                <div class="url-list">
+                    <strong>OAuth Callback URL:</strong><br>
+                    ${REDIRECT_URLS.OAUTH_CALLBACK}
+                </div>
+                <div class="url-list">
+                    <strong>Success URL:</strong><br>
+                    ${REDIRECT_URLS.SUCCESS}
+                </div>
+                <div class="url-list">
+                    <strong>Error URL:</strong><br>
+                    ${REDIRECT_URLS.ERROR}
+                </div>
+            </div>
+            
+            <div class="info">
+                <h3>⚙️ Setup Instructions</h3>
+                <ol style="text-align: left;">
+                    <li>Create a new Slack app at <a href="https://api.slack.com/apps" target="_blank">api.slack.com/apps</a></li>
+                    <li>Go to "OAuth & Permissions" in your app settings</li>
+                    <li>Add the OAuth Callback URL above to "Redirect URLs"</li>
+                    <li>Copy your Client ID and Client Secret to your .env file</li>
+                    <li>Add the required OAuth scopes for your app</li>
+                </ol>
+            </div>
+        </div>
+    </body>
+    </html>
+  `);
+});
+
+// Initiate OAuth flow - redirects to Slack
+app.get('/slack/oauth/authorize', (req, res) => {
+  if (!SLACK_CLIENT_ID) {
+    return res.status(500).send('Slack Client ID not configured. Please check your environment variables.');
+  }
+
+  const scopes = [
+    'channels:read',
+    'chat:write',
+    'commands',
+    'incoming-webhook',
+    'users:read'
+  ].join(',');
+
+  const state = generateRandomState();
+  
+  const authUrl = `https://slack.com/oauth/v2/authorize?` +
+    `client_id=${SLACK_CLIENT_ID}&` +
+    `scope=${encodeURIComponent(scopes)}&` +
+    `redirect_uri=${encodeURIComponent(REDIRECT_URLS.OAUTH_CALLBACK)}&` +
+    `state=${state}`;
+
+  // Store state in session/memory for validation (in production, use proper session management)
+  req.session = req.session || {};
+  req.session.oauthState = state;
+
+  res.redirect(authUrl);
+});
+
+// OAuth callback - handles the response from Slack
+app.get('/slack/oauth/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error) {
+    console.error('OAuth error:', error);
+    return res.redirect(`${REDIRECT_URLS.ERROR}?error=${encodeURIComponent(error)}`);
+  }
+
+  if (!code) {
+    console.error('No authorization code received');
+    return res.redirect(`${REDIRECT_URLS.ERROR}?error=no_code`);
+  }
+
+  try {
+    // Exchange authorization code for access token
+    const tokenResponse = await axios.post('https://slack.com/api/oauth.v2.access', {
+      client_id: SLACK_CLIENT_ID,
+      client_secret: SLACK_CLIENT_SECRET,
+      code: code,
+      redirect_uri: REDIRECT_URLS.OAUTH_CALLBACK
+    }, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    const { data } = tokenResponse;
+
+    if (!data.ok) {
+      console.error('Slack OAuth error:', data.error);
+      return res.redirect(`${REDIRECT_URLS.ERROR}?error=${encodeURIComponent(data.error)}`);
+    }
+
+    // Store the access token and team info (in production, store in database)
+    const installationData = {
+      team_id: data.team.id,
+      team_name: data.team.name,
+      access_token: data.access_token,
+      bot_user_id: data.bot_user_id,
+      scope: data.scope,
+      installed_at: new Date().toISOString()
+    };
+
+    console.log('Slack app installed successfully:', {
+      team_name: installationData.team_name,
+      team_id: installationData.team_id,
+      scopes: installationData.scope
+    });
+
+    // Redirect to success page
+    res.redirect(`${REDIRECT_URLS.SUCCESS}?team=${encodeURIComponent(data.team.name)}`);
+
+  } catch (error) {
+    console.error('Error during OAuth callback:', error.message);
+    res.redirect(`${REDIRECT_URLS.ERROR}?error=oauth_failed`);
+  }
+});
+
+// Success page
+app.get('/success', (req, res) => {
+  const teamName = req.query.team || 'your workspace';
+  
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Installation Successful</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; 
+                max-width: 600px; 
+                margin: 0 auto; 
+                padding: 20px;
+                background-color: #f8f9fa;
+                text-align: center;
+            }
+            .container {
+                background: white;
+                padding: 40px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            .success-icon { font-size: 64px; color: #28a745; margin-bottom: 20px; }
+            h1 { color: #333; }
+            .back-link {
+                display: inline-block;
+                background-color: #007bff;
+                color: white;
+                padding: 10px 20px;
+                text-decoration: none;
+                border-radius: 5px;
+                margin-top: 20px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="success-icon">✅</div>
+            <h1>Installation Successful!</h1>
+            <p>Your Slack app has been successfully installed to <strong>${teamName}</strong>.</p>
+            <p>You can now use the app in your Slack workspace.</p>
+            <a href="/" class="back-link">← Back to Home</a>
+        </div>
+    </body>
+    </html>
+  `);
+});
+
+// Error page
+app.get('/error', (req, res) => {
+  const error = req.query.error || 'unknown_error';
+  
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Installation Error</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; 
+                max-width: 600px; 
+                margin: 0 auto; 
+                padding: 20px;
+                background-color: #f8f9fa;
+                text-align: center;
+            }
+            .container {
+                background: white;
+                padding: 40px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            .error-icon { font-size: 64px; color: #dc3545; margin-bottom: 20px; }
+            h1 { color: #333; }
+            .error-code { 
+                background-color: #f8f9fa; 
+                padding: 10px; 
+                border-radius: 5px; 
+                font-family: monospace; 
+                margin: 20px 0; 
+            }
+            .back-link {
+                display: inline-block;
+                background-color: #007bff;
+                color: white;
+                padding: 10px 20px;
+                text-decoration: none;
+                border-radius: 5px;
+                margin-top: 20px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="error-icon">❌</div>
+            <h1>Installation Failed</h1>
+            <p>There was an error installing the Slack app.</p>
+            <div class="error-code">Error: ${error}</div>
+            <p>Please try again or contact support if the problem persists.</p>
+            <a href="/" class="back-link">← Try Again</a>
+        </div>
+    </body>
+    </html>
+  `);
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    config: {
+      client_id_configured: !!SLACK_CLIENT_ID,
+      client_secret_configured: !!SLACK_CLIENT_SECRET,
+      base_url: BASE_URL,
+      redirect_urls: REDIRECT_URLS
+    }
+  });
+});
+
+// Utility function to generate random state for OAuth
+function generateRandomState() {
+  return Math.random().toString(36).substring(2, 15) + 
+         Math.random().toString(36).substring(2, 15);
+}
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).send('Something went wrong!');
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📱 Main URL: ${BASE_URL}`);
+  console.log(`🔗 OAuth Callback URL: ${REDIRECT_URLS.OAUTH_CALLBACK}`);
+  console.log(`✅ Success URL: ${REDIRECT_URLS.SUCCESS}`);
+  console.log(`❌ Error URL: ${REDIRECT_URLS.ERROR}`);
+  console.log('\n📋 Configure these URLs in your Slack app settings:');
+  console.log(`   - OAuth Callback URL: ${REDIRECT_URLS.OAUTH_CALLBACK}`);
+  
+  if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
+    console.log('\n⚠️  Warning: Slack credentials not configured!');
+    console.log('   Please copy env.example to .env and add your Slack app credentials.');
+  }
+}); 

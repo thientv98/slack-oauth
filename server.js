@@ -237,97 +237,96 @@ app.get('/slack/oauth/callback', async (req, res) => {
   console.log('code', code);
 
   res.redirect(`${REDIRECT_URLS.SUCCESS}`);
-  return;
 
-  try {
-    // Exchange authorization code for access token with timeout
-    console.log('Exchanging OAuth code for token...');
-    const tokenResponse = await axios.post('https://slack.com/api/oauth.v2.access', {
-      client_id: SLACK_CLIENT_ID,
-      client_secret: SLACK_CLIENT_SECRET,
-      code: code,
-      redirect_uri: REDIRECT_URLS.OAUTH_CALLBACK
-    }, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      timeout: 15000 // 15 second timeout
-    });
+  // try {
+  //   // Exchange authorization code for access token with timeout
+  //   console.log('Exchanging OAuth code for token...');
+  //   const tokenResponse = await axios.post('https://slack.com/api/oauth.v2.access', {
+  //     client_id: SLACK_CLIENT_ID,
+  //     client_secret: SLACK_CLIENT_SECRET,
+  //     code: code,
+  //     redirect_uri: REDIRECT_URLS.OAUTH_CALLBACK
+  //   }, {
+  //     headers: {
+  //       'Content-Type': 'application/x-www-form-urlencoded'
+  //     },
+  //     timeout: 15000 // 15 second timeout
+  //   });
 
-    const { data } = tokenResponse;
+  //   const { data } = tokenResponse;
 
-    if (!data.ok) {
-      console.error('Slack OAuth error:', data.error);
-      return res.redirect(`${REDIRECT_URLS.ERROR}?error=${encodeURIComponent(data.error)}`);
-    }
+  //   if (!data.ok) {
+  //     console.error('Slack OAuth error:', data.error);
+  //     return res.redirect(`${REDIRECT_URLS.ERROR}?error=${encodeURIComponent(data.error)}`);
+  //   }
 
-    // Store the access token and team info in database
-    const installationData = {
-      team_id: data.team.id,
-      team_name: data.team.name,
-      access_token: data.access_token,
-      bot_user_id: data.bot_user_id,
-      scope: data.scope,
-      installed_at: new Date().toISOString()
-    };
+  //   // Store the access token and team info in database
+  //   const installationData = {
+  //     team_id: data.team.id,
+  //     team_name: data.team.name,
+  //     access_token: data.access_token,
+  //     bot_user_id: data.bot_user_id,
+  //     scope: data.scope,
+  //     installed_at: new Date().toISOString()
+  //   };
 
-    console.log('Installation data:', installationData);
+  //   console.log('Installation data:', installationData);
 
-    // Save to database
-    try {
-      const insertQuery = `
-        INSERT INTO slack_installations (team_id, team_name, access_token, bot_user_id, scope, updated_at)
-        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-        ON CONFLICT (team_id) 
-        DO UPDATE SET 
-          team_name = EXCLUDED.team_name,
-          access_token = EXCLUDED.access_token,
-          bot_user_id = EXCLUDED.bot_user_id,
-          scope = EXCLUDED.scope,
-          updated_at = CURRENT_TIMESTAMP
-      `;
+  //   // Save to database
+  //   try {
+  //     const insertQuery = `
+  //       INSERT INTO slack_installations (team_id, team_name, access_token, bot_user_id, scope, updated_at)
+  //       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+  //       ON CONFLICT (team_id) 
+  //       DO UPDATE SET 
+  //         team_name = EXCLUDED.team_name,
+  //         access_token = EXCLUDED.access_token,
+  //         bot_user_id = EXCLUDED.bot_user_id,
+  //         scope = EXCLUDED.scope,
+  //         updated_at = CURRENT_TIMESTAMP
+  //     `;
       
-      await pool.query(insertQuery, [
-        installationData.team_id,
-        installationData.team_name,
-        installationData.access_token,
-        installationData.bot_user_id,
-        installationData.scope
-      ]);
+  //     await pool.query(insertQuery, [
+  //       installationData.team_id,
+  //       installationData.team_name,
+  //       installationData.access_token,
+  //       installationData.bot_user_id,
+  //       installationData.scope
+  //     ]);
       
-      console.log('✅ Installation data saved to database successfully');
-    } catch (dbError) {
-      console.error('❌ Error saving installation data to database:', dbError);
-      // Continue with the flow even if DB save fails
-    }
+  //     console.log('✅ Installation data saved to database successfully');
+  //   } catch (dbError) {
+  //     console.error('❌ Error saving installation data to database:', dbError);
+  //     // Continue with the flow even if DB save fails
+  //   }
 
-    console.log('Slack app installed successfully:', {
-      team_name: installationData.team_name,
-      team_id: installationData.team_id,
-      scopes: installationData.scope
-    });
+  //   console.log('Slack app installed successfully:', {
+  //     team_name: installationData.team_name,
+  //     team_id: installationData.team_id,
+  //     scopes: installationData.scope
+  //   });
 
-    // Redirect to success page
-    res.redirect(`${REDIRECT_URLS.SUCCESS}?team=${encodeURIComponent(data.team.name)}`);
+  //   // Redirect to success page
+  //   res.redirect(`${REDIRECT_URLS.SUCCESS}?team=${encodeURIComponent(data.team.name)}`);
 
-  } catch (error) {
-    console.error('Error during OAuth callback:', error);
+  // } catch (error) {
+  //   console.error('Error during OAuth callback:', error);
     
-    // Handle specific axios timeout errors
-    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-      console.error('Slack API timeout');
-      return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_timeout`);
-    }
+  //   // Handle specific axios timeout errors
+  //   if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+  //     console.error('Slack API timeout');
+  //     return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_timeout`);
+  //   }
     
-    // Handle axios errors
-    if (error.response) {
-      console.error('Slack API error response:', error.response.data);
-      return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_error`);
-    }
+  //   // Handle axios errors
+  //   if (error.response) {
+  //     console.error('Slack API error response:', error.response.data);
+  //     return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_error`);
+  //   }
     
-    console.error('Generic OAuth error:', error.message);
-    res.redirect(`${REDIRECT_URLS.ERROR}?error=oauth_failed`);
-  }
+  //   console.error('Generic OAuth error:', error.message);
+  //   res.redirect(`${REDIRECT_URLS.ERROR}?error=oauth_failed`);
+  // }
 });
 
 // Success page

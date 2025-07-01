@@ -236,6 +236,8 @@ app.get('/slack/oauth/callback', async (req, res) => {
 
   console.log('code', code);
 
+  res.redirect(`${REDIRECT_URLS.SUCCESS}}`);
+
   try {
     // Exchange authorization code for access token with timeout
     console.log('Exchanging OAuth code for token...');

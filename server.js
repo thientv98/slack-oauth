@@ -21,7 +21,7 @@ const pool = new Pool({
 // Initialize database table
 async function initializeDatabase() {
   try {
-    const createTableQuery = `
+    const createInstallationsTableQuery = `
       CREATE TABLE IF NOT EXISTS slack_installations (
         id SERIAL PRIMARY KEY,
         team_id VARCHAR(255) UNIQUE NOT NULL,
@@ -34,8 +34,27 @@ async function initializeDatabase() {
       )
     `;
     
-    await pool.query(createTableQuery);
-    console.log('✅ Database table initialized successfully');
+    const createChannelConfigsTableQuery = `
+      CREATE TABLE IF NOT EXISTS channel_configs (
+        id SERIAL PRIMARY KEY,
+        team_id VARCHAR(255) NOT NULL,
+        channel_id VARCHAR(255) NOT NULL,
+        channel_name VARCHAR(255) NOT NULL,
+        translate_on_reaction BOOLEAN DEFAULT FALSE,
+        translate_on_new_message BOOLEAN DEFAULT FALSE,
+        translate_on_mention BOOLEAN DEFAULT FALSE,
+        source_language VARCHAR(10) DEFAULT 'auto',
+        target_language VARCHAR(10) DEFAULT 'en',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(team_id, channel_id),
+        FOREIGN KEY (team_id) REFERENCES slack_installations(team_id) ON DELETE CASCADE
+      )
+    `;
+    
+    await pool.query(createInstallationsTableQuery);
+    await pool.query(createChannelConfigsTableQuery);
+    console.log('✅ Database tables initialized successfully');
   } catch (error) {
     console.error('❌ Error initializing database:', error);
   }
@@ -236,97 +255,95 @@ app.get('/slack/oauth/callback', async (req, res) => {
 
   console.log('code', code);
 
-  res.redirect(`${REDIRECT_URLS.SUCCESS}`);
+  try {
+    // Exchange authorization code for access token with timeout
+    console.log('Exchanging OAuth code for token...');
+    const tokenResponse = await axios.post('https://slack.com/api/oauth.v2.access', {
+      client_id: SLACK_CLIENT_ID,
+      client_secret: SLACK_CLIENT_SECRET,
+      code: code,
+      redirect_uri: REDIRECT_URLS.OAUTH_CALLBACK
+    }, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 15000 // 15 second timeout
+    });
 
-  // try {
-  //   // Exchange authorization code for access token with timeout
-  //   console.log('Exchanging OAuth code for token...');
-  //   const tokenResponse = await axios.post('https://slack.com/api/oauth.v2.access', {
-  //     client_id: SLACK_CLIENT_ID,
-  //     client_secret: SLACK_CLIENT_SECRET,
-  //     code: code,
-  //     redirect_uri: REDIRECT_URLS.OAUTH_CALLBACK
-  //   }, {
-  //     headers: {
-  //       'Content-Type': 'application/x-www-form-urlencoded'
-  //     },
-  //     timeout: 15000 // 15 second timeout
-  //   });
+    const { data } = tokenResponse;
 
-  //   const { data } = tokenResponse;
+    if (!data.ok) {
+      console.error('Slack OAuth error:', data.error);
+      return res.redirect(`${REDIRECT_URLS.ERROR}?error=${encodeURIComponent(data.error)}`);
+    }
 
-  //   if (!data.ok) {
-  //     console.error('Slack OAuth error:', data.error);
-  //     return res.redirect(`${REDIRECT_URLS.ERROR}?error=${encodeURIComponent(data.error)}`);
-  //   }
+    // Store the access token and team info in database
+    const installationData = {
+      team_id: data.team.id,
+      team_name: data.team.name,
+      access_token: data.access_token,
+      bot_user_id: data.bot_user_id,
+      scope: data.scope,
+      installed_at: new Date().toISOString()
+    };
 
-  //   // Store the access token and team info in database
-  //   const installationData = {
-  //     team_id: data.team.id,
-  //     team_name: data.team.name,
-  //     access_token: data.access_token,
-  //     bot_user_id: data.bot_user_id,
-  //     scope: data.scope,
-  //     installed_at: new Date().toISOString()
-  //   };
+    console.log('Installation data:', installationData);
 
-  //   console.log('Installation data:', installationData);
-
-  //   // Save to database
-  //   try {
-  //     const insertQuery = `
-  //       INSERT INTO slack_installations (team_id, team_name, access_token, bot_user_id, scope, updated_at)
-  //       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-  //       ON CONFLICT (team_id) 
-  //       DO UPDATE SET 
-  //         team_name = EXCLUDED.team_name,
-  //         access_token = EXCLUDED.access_token,
-  //         bot_user_id = EXCLUDED.bot_user_id,
-  //         scope = EXCLUDED.scope,
-  //         updated_at = CURRENT_TIMESTAMP
-  //     `;
+    // Save to database
+    try {
+      const insertQuery = `
+        INSERT INTO slack_installations (team_id, team_name, access_token, bot_user_id, scope, updated_at)
+        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+        ON CONFLICT (team_id) 
+        DO UPDATE SET 
+          team_name = EXCLUDED.team_name,
+          access_token = EXCLUDED.access_token,
+          bot_user_id = EXCLUDED.bot_user_id,
+          scope = EXCLUDED.scope,
+          updated_at = CURRENT_TIMESTAMP
+      `;
       
-  //     await pool.query(insertQuery, [
-  //       installationData.team_id,
-  //       installationData.team_name,
-  //       installationData.access_token,
-  //       installationData.bot_user_id,
-  //       installationData.scope
-  //     ]);
+      await pool.query(insertQuery, [
+        installationData.team_id,
+        installationData.team_name,
+        installationData.access_token,
+        installationData.bot_user_id,
+        installationData.scope
+      ]);
       
-  //     console.log('✅ Installation data saved to database successfully');
-  //   } catch (dbError) {
-  //     console.error('❌ Error saving installation data to database:', dbError);
-  //     // Continue with the flow even if DB save fails
-  //   }
+      console.log('✅ Installation data saved to database successfully');
+    } catch (dbError) {
+      console.error('❌ Error saving installation data to database:', dbError);
+      // Continue with the flow even if DB save fails
+    }
 
-  //   console.log('Slack app installed successfully:', {
-  //     team_name: installationData.team_name,
-  //     team_id: installationData.team_id,
-  //     scopes: installationData.scope
-  //   });
+    console.log('Slack app installed successfully:', {
+      team_name: installationData.team_name,
+      team_id: installationData.team_id,
+      scopes: installationData.scope
+    });
 
-  //   // Redirect to success page
-  //   res.redirect(`${REDIRECT_URLS.SUCCESS}?team=${encodeURIComponent(data.team.name)}`);
+    // Redirect to success page
+    res.redirect(`${REDIRECT_URLS.SUCCESS}?team=${encodeURIComponent(data.team.name)}`);
 
-  // } catch (error) {
-  //   console.error('Error during OAuth callback:', error);
+  } catch (error) {
+    console.error('Error during OAuth callback:', error);
     
-  //   // Handle specific axios timeout errors
-  //   if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-  //     console.error('Slack API timeout');
-  //     return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_timeout`);
-  //   }
+    // Handle specific axios timeout errors
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      console.error('Slack API timeout');
+      return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_timeout`);
+    }
     
-  //   // Handle axios errors
-  //   if (error.response) {
-  //     console.error('Slack API error response:', error.response.data);
-  //     return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_error`);
-  //   }
+    // Handle axios errors
+    if (error.response) {
+      console.error('Slack API error response:', error.response.data);
+      return res.redirect(`${REDIRECT_URLS.ERROR}?error=slack_api_error`);
+    }
     
-  //   console.error('Generic OAuth error:', error.message);
-  //   res.redirect(`${REDIRECT_URLS.ERROR}?error=oauth_failed`);
-  // }
+    console.error('Generic OAuth error:', error.message);
+    res.redirect(`${REDIRECT_URLS.ERROR}?error=oauth_failed`);
+  }
 });
 
 // Success page
@@ -467,6 +484,7 @@ app.get('/status', (req, res) => {
 // API endpoint to get access token by team ID
 app.get('/api/installations/:team_id', async (req, res) => {
   const { team_id } = req.params;
+  const { channel } = req.query;
   
   if (!team_id) {
     return res.status(400).json({ 
@@ -476,19 +494,78 @@ app.get('/api/installations/:team_id', async (req, res) => {
   }
 
   try {
-    const query = 'SELECT * FROM slack_installations WHERE team_id = $1';
-    const result = await pool.query(query, [team_id]);
+    const installationQuery = 'SELECT * FROM slack_installations WHERE team_id = $1';
+    const installationResult = await pool.query(installationQuery, [team_id]);
     
-    if (result.rows.length === 0) {
+    if (installationResult.rows.length === 0) {
       return res.status(404).json({ 
         error: 'installation_not_found',
         message: `No installation found for team_id: ${team_id}` 
       });
     }
     
-    const installation = result.rows[0];
+    const installation = installationResult.rows[0];
     
-    // Return installation data (excluding sensitive info in logs)
+    // If channel parameter is provided, get specific channel config
+    if (channel) {
+      const channelConfigQuery = 'SELECT * FROM channel_configs WHERE team_id = $1 AND channel_id = $2';
+      const channelConfigResult = await pool.query(channelConfigQuery, [team_id, channel]);
+      
+      let channelConfig;
+      if (channelConfigResult.rows.length > 0) {
+        // Return existing config from database
+        const config = channelConfigResult.rows[0];
+        channelConfig = {
+          channel_id: config.channel_id,
+          channel_name: config.channel_name,
+          translate_on_reaction: config.translate_on_reaction,
+          translate_on_new_message: config.translate_on_new_message,
+          translate_on_mention: config.translate_on_mention,
+          source_language: config.source_language,
+          target_language: config.target_language,
+          created_at: config.created_at,
+          updated_at: config.updated_at
+        };
+      } else {
+        // Return default config if no data found
+        channelConfig = {
+          channel_id: channel,
+          channel_name: null,
+          translate_on_reaction: true,  // Default to true
+          translate_on_new_message: false,
+          translate_on_mention: false,
+          source_language: 'auto',
+          target_language: 'en',
+          created_at: null,
+          updated_at: null
+        };
+      }
+      
+      return res.json({
+        success: true,
+        data: {
+          team_id: installation.team_id,
+          team_name: installation.team_name,
+          access_token: installation.access_token,
+          bot_user_id: installation.bot_user_id,
+          scope: installation.scope,
+          installed_at: installation.installed_at,
+          updated_at: installation.updated_at,
+          channel_config: channelConfig
+        }
+      });
+    }
+    
+    // If no channel parameter, return default config
+    const defaultConfig = {
+      translate_on_reaction: true,  // Default to true
+      translate_on_new_message: false,
+      translate_on_mention: false,
+      source_language: 'auto',
+      target_language: 'en'
+    };
+    
+    // Return installation data with default config
     res.json({
       success: true,
       data: {
@@ -498,7 +575,8 @@ app.get('/api/installations/:team_id', async (req, res) => {
         bot_user_id: installation.bot_user_id,
         scope: installation.scope,
         installed_at: installation.installed_at,
-        updated_at: installation.updated_at
+        updated_at: installation.updated_at,
+        default_config: defaultConfig
       }
     });
     
@@ -531,6 +609,580 @@ app.get('/api/installations', async (req, res) => {
     });
   }
 });
+
+// Slash command: /translate-config
+app.post('/slack/commands/translate-config', async (req, res) => {
+  try {
+    const { team_id, channel_id, channel_name, user_id, trigger_id } = req.body;
+    
+    console.log('Translate config command received:', { team_id, channel_id, channel_name, user_id });
+    
+    // Verify installation exists
+    const installationQuery = 'SELECT access_token FROM slack_installations WHERE team_id = $1';
+    const installationResult = await pool.query(installationQuery, [team_id]);
+    
+    if (installationResult.rows.length === 0) {
+      return res.json({
+        response_type: 'ephemeral',
+        text: '❌ App not properly installed. Please reinstall the app.'
+      });
+    }
+    
+    const accessToken = installationResult.rows[0].access_token;
+    
+    // Get current channel config
+    const configQuery = 'SELECT * FROM channel_configs WHERE team_id = $1 AND channel_id = $2';
+    const configResult = await pool.query(configQuery, [team_id, channel_id]);
+    
+    const currentConfig = configResult.rows[0] || {
+      translate_on_reaction: false,
+      translate_on_new_message: false,
+      translate_on_mention: false,
+      source_language: 'auto',
+      target_language: 'en'
+    };
+    
+    // Create modal view
+    const modalView = {
+      type: 'modal',
+      callback_id: 'translate_config_modal',
+      title: {
+        type: 'plain_text',
+        text: 'Translation Config'
+      },
+      submit: {
+        type: 'plain_text',
+        text: 'Save'
+      },
+      close: {
+        type: 'plain_text',
+        text: 'Cancel'
+      },
+      private_metadata: JSON.stringify({ team_id, channel_id, channel_name }),
+      blocks: [
+        {
+          type: 'header',
+          text: {
+            type: 'plain_text',
+            text: `Configure Translation for #${channel_name}`
+          }
+        },
+        {
+          type: 'divider'
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*Translation Triggers*\nSelect when to automatically translate messages:'
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: 'Translation options:'
+          },
+          accessory: {
+            type: 'checkboxes',
+            action_id: 'translate_options',
+            initial_options: [
+              ...(currentConfig.translate_on_reaction ? [{
+                text: { type: 'plain_text', text: 'Translate when reacted with 🌐' },
+                value: 'translate_on_reaction'
+              }] : []),
+              ...(currentConfig.translate_on_new_message ? [{
+                text: { type: 'plain_text', text: 'Translate all new messages' },
+                value: 'translate_on_new_message'
+              }] : []),
+              ...(currentConfig.translate_on_mention ? [{
+                text: { type: 'plain_text', text: 'Translate when bot is mentioned' },
+                value: 'translate_on_mention'
+              }] : [])
+            ],
+            options: [
+              {
+                text: { type: 'plain_text', text: 'Translate when reacted with 🌐' },
+                value: 'translate_on_reaction'
+              },
+              {
+                text: { type: 'plain_text', text: 'Translate all new messages' },
+                value: 'translate_on_new_message'
+              },
+              {
+                text: { type: 'plain_text', text: 'Translate when bot is mentioned' },
+                value: 'translate_on_mention'
+              }
+            ]
+          }
+        },
+        {
+          type: 'divider'
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*Source Language*'
+          },
+          accessory: {
+            type: 'static_select',
+            action_id: 'source_language',
+            placeholder: { type: 'plain_text', text: 'Select source language' },
+            initial_option: {
+              text: { type: 'plain_text', text: currentConfig.source_language === 'auto' ? 'Auto-detect' : currentConfig.source_language.toUpperCase() },
+              value: currentConfig.source_language
+            },
+            options: [
+              { text: { type: 'plain_text', text: 'Auto-detect' }, value: 'auto' },
+              { text: { type: 'plain_text', text: 'English' }, value: 'en' },
+              { text: { type: 'plain_text', text: 'Vietnamese' }, value: 'vi' },
+              { text: { type: 'plain_text', text: 'Japanese' }, value: 'ja' },
+              { text: { type: 'plain_text', text: 'Korean' }, value: 'ko' },
+              { text: { type: 'plain_text', text: 'Chinese' }, value: 'zh' },
+              { text: { type: 'plain_text', text: 'Spanish' }, value: 'es' },
+              { text: { type: 'plain_text', text: 'French' }, value: 'fr' },
+              { text: { type: 'plain_text', text: 'German' }, value: 'de' }
+            ]
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*Target Language*'
+          },
+          accessory: {
+            type: 'static_select',
+            action_id: 'target_language',
+            placeholder: { type: 'plain_text', text: 'Select target language' },
+            initial_option: {
+              text: { type: 'plain_text', text: currentConfig.target_language.toUpperCase() },
+              value: currentConfig.target_language
+            },
+            options: [
+              { text: { type: 'plain_text', text: 'English' }, value: 'en' },
+              { text: { type: 'plain_text', text: 'Vietnamese' }, value: 'vi' },
+              { text: { type: 'plain_text', text: 'Japanese' }, value: 'ja' },
+              { text: { type: 'plain_text', text: 'Korean' }, value: 'ko' },
+              { text: { type: 'plain_text', text: 'Chinese' }, value: 'zh' },
+              { text: { type: 'plain_text', text: 'Spanish' }, value: 'es' },
+              { text: { type: 'plain_text', text: 'French' }, value: 'fr' },
+              { text: { type: 'plain_text', text: 'German' }, value: 'de' }
+            ]
+          }
+        }
+      ]
+    };
+    
+    // Open modal using Slack API
+    const modalResponse = await axios.post('https://slack.com/api/views.open', {
+      trigger_id: trigger_id,
+      view: modalView
+    }, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!modalResponse.data.ok) {
+      console.error('Error opening modal:', modalResponse.data);
+      return res.json({
+        response_type: 'ephemeral',
+        text: '❌ Error opening configuration modal. Please try again.'
+      });
+    }
+    
+    // Return empty response since modal is opened
+    res.json({});
+    
+  } catch (error) {
+    console.error('Error in translate-config command:', error);
+    res.json({
+      response_type: 'ephemeral',
+      text: '❌ Error processing command. Please try again.'
+    });
+  }
+});
+
+// Handle interactive components (modal submissions)
+app.post('/slack/interactive', async (req, res) => {
+  try {
+    const payload = JSON.parse(req.body.payload);
+    
+    console.log('Interactive payload received:', payload.type);
+    
+    if (payload.type === 'view_submission' && payload.view.callback_id === 'translate_config_modal') {
+      await handleTranslateConfigSubmission(payload);
+    }
+    
+    res.json({});
+  } catch (error) {
+    console.error('Error handling interactive component:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Handle translate config modal submission
+async function handleTranslateConfigSubmission(payload) {
+  try {
+    const { team_id, channel_id, channel_name } = JSON.parse(payload.view.private_metadata);
+    const values = payload.view.state.values;
+    
+    console.log('Handling translate config submission for:', { team_id, channel_id, channel_name });
+    
+    // Extract form values
+    const translateOptions = values.translate_options || {};
+    const sourceLanguage = values.source_language || {};
+    const targetLanguage = values.target_language || {};
+    
+    // Parse selected options
+    const selectedOptions = translateOptions.translate_options?.selected_options || [];
+    const config = {
+      translate_on_reaction: selectedOptions.some(opt => opt.value === 'translate_on_reaction'),
+      translate_on_new_message: selectedOptions.some(opt => opt.value === 'translate_on_new_message'),
+      translate_on_mention: selectedOptions.some(opt => opt.value === 'translate_on_mention'),
+      source_language: sourceLanguage.source_language?.selected_option?.value || 'auto',
+      target_language: targetLanguage.target_language?.selected_option?.value || 'en'
+    };
+    
+    console.log('Parsed config:', config);
+    
+    // Save to database
+    const upsertQuery = `
+      INSERT INTO channel_configs (team_id, channel_id, channel_name, translate_on_reaction, translate_on_new_message, translate_on_mention, source_language, target_language, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+      ON CONFLICT (team_id, channel_id) 
+      DO UPDATE SET 
+        channel_name = EXCLUDED.channel_name,
+        translate_on_reaction = EXCLUDED.translate_on_reaction,
+        translate_on_new_message = EXCLUDED.translate_on_new_message,
+        translate_on_mention = EXCLUDED.translate_on_mention,
+        source_language = EXCLUDED.source_language,
+        target_language = EXCLUDED.target_language,
+        updated_at = CURRENT_TIMESTAMP
+    `;
+    
+    await pool.query(upsertQuery, [
+      team_id,
+      channel_id,
+      channel_name,
+      config.translate_on_reaction,
+      config.translate_on_new_message,
+      config.translate_on_mention,
+      config.source_language,
+      config.target_language
+    ]);
+    
+    console.log('✅ Channel config saved successfully');
+    
+    // Get access token for response
+    const installationQuery = 'SELECT access_token FROM slack_installations WHERE team_id = $1';
+    const installationResult = await pool.query(installationQuery, [team_id]);
+    
+    if (installationResult.rows.length > 0) {
+      const accessToken = installationResult.rows[0].access_token;
+      
+      // Send success message to channel
+      const enabledFeatures = [];
+      if (config.translate_on_reaction) enabledFeatures.push('React with 🌐');
+      if (config.translate_on_new_message) enabledFeatures.push('New messages');
+      if (config.translate_on_mention) enabledFeatures.push('Bot mentions');
+      
+      const message = {
+        channel: channel_id,
+        text: `✅ Translation configuration updated for #${channel_name}`,
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `✅ *Translation configuration updated for #${channel_name}*`
+            }
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: `*Enabled features:*\n${enabledFeatures.length > 0 ? enabledFeatures.join('\n') : 'None'}`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Language settings:*\n${config.source_language === 'auto' ? 'Auto-detect' : config.source_language.toUpperCase()} → ${config.target_language.toUpperCase()}`
+              }
+            ]
+          }
+        ]
+      };
+      
+      await axios.post('https://slack.com/api/chat.postMessage', message, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error handling translate config submission:', error);
+  }
+}
+
+// Handle Slack events (messages, reactions, mentions)
+app.post('/slack/events', async (req, res) => {
+  try {
+    const { type, challenge, event, team_id } = req.body;
+
+    // Handle URL verification
+    if (type === 'url_verification') {
+      return res.json({ challenge });
+    }
+
+    // Handle events
+    if (type === 'event_callback' && event) {
+      console.log('Received event:', event.type, 'in team:', team_id);
+      
+      // Handle different event types
+      switch (event.type) {
+        case 'message':
+          await handleMessageEvent(event, team_id);
+          break;
+        case 'reaction_added':
+          await handleReactionEvent(event, team_id);
+          break;
+        case 'app_mention':
+          await handleMentionEvent(event, team_id);
+          break;
+      }
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Error handling Slack event:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Handle message events
+async function handleMessageEvent(event, team_id) {
+  try {
+    // Skip bot messages and message changes
+    if (event.bot_id || event.subtype === 'message_changed' || event.subtype === 'message_deleted') {
+      return;
+    }
+
+    const { channel, text, user } = event;
+
+    // Get channel config
+    const configQuery = 'SELECT * FROM channel_configs WHERE team_id = $1 AND channel_id = $2';
+    const configResult = await pool.query(configQuery, [team_id, channel]);
+
+    if (configResult.rows.length === 0 || !configResult.rows[0].translate_on_new_message) {
+      return; // No config or translate_on_new_message is disabled
+    }
+
+    const config = configResult.rows[0];
+    
+    // Translate the message
+    const translatedText = await translateText(text, config.source_language, config.target_language);
+    
+    if (translatedText && translatedText !== text) {
+      await postTranslation(team_id, channel, translatedText, `Auto-translated (${config.source_language} → ${config.target_language})`);
+    }
+
+  } catch (error) {
+    console.error('Error handling message event:', error);
+  }
+}
+
+// Handle reaction events
+async function handleReactionEvent(event, team_id) {
+  try {
+    const { reaction, item, user } = event;
+
+    // Only handle globe reaction
+    if (reaction !== 'globe_with_meridians') {
+      return;
+    }
+
+    // Get channel config
+    const configQuery = 'SELECT * FROM channel_configs WHERE team_id = $1 AND channel_id = $2';
+    const configResult = await pool.query(configQuery, [team_id, item.channel]);
+
+    if (configResult.rows.length === 0 || !configResult.rows[0].translate_on_reaction) {
+      return; // No config or translate_on_reaction is disabled
+    }
+
+    const config = configResult.rows[0];
+
+    // Get the original message
+    const accessToken = await getAccessToken(team_id);
+    if (!accessToken) return;
+
+    const messageResponse = await axios.post('https://slack.com/api/conversations.history', {
+      channel: item.channel,
+      latest: item.ts,
+      limit: 1,
+      inclusive: true
+    }, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!messageResponse.data.ok || !messageResponse.data.messages.length) {
+      return;
+    }
+
+    const originalMessage = messageResponse.data.messages[0];
+    const translatedText = await translateText(originalMessage.text, config.source_language, config.target_language);
+
+    if (translatedText && translatedText !== originalMessage.text) {
+      await postTranslation(team_id, item.channel, translatedText, `Translated (${config.source_language} → ${config.target_language})`, item.ts);
+    }
+
+  } catch (error) {
+    console.error('Error handling reaction event:', error);
+  }
+}
+
+// Handle mention events
+async function handleMentionEvent(event, team_id) {
+  try {
+    const { channel, text, user } = event;
+
+    // Get channel config
+    const configQuery = 'SELECT * FROM channel_configs WHERE team_id = $1 AND channel_id = $2';
+    const configResult = await pool.query(configQuery, [team_id, channel]);
+
+    if (configResult.rows.length === 0 || !configResult.rows[0].translate_on_mention) {
+      return; // No config or translate_on_mention is disabled
+    }
+
+    const config = configResult.rows[0];
+    
+    // Remove the mention from the text
+    const textWithoutMention = text.replace(/<@[^>]+>/g, '').trim();
+    
+    if (!textWithoutMention) {
+      return;
+    }
+
+    // Translate the message
+    const translatedText = await translateText(textWithoutMention, config.source_language, config.target_language);
+    
+    if (translatedText && translatedText !== textWithoutMention) {
+      await postTranslation(team_id, channel, translatedText, `Translated (${config.source_language} → ${config.target_language})`);
+    }
+
+  } catch (error) {
+    console.error('Error handling mention event:', error);
+  }
+}
+
+// Translation function (using Google Translate API or similar)
+async function translateText(text, sourceLanguage, targetLanguage) {
+  try {
+    if (!text || !text.trim()) {
+      return null;
+    }
+
+    // Skip if source and target languages are the same
+    if (sourceLanguage === targetLanguage) {
+      return null;
+    }
+
+    // For demo purposes, returning a mock translation
+    // In production, you would use Google Translate API, AWS Translate, etc.
+    const mockTranslation = `[TRANSLATED ${sourceLanguage} → ${targetLanguage}] ${text}`;
+    
+    // TODO: Implement actual translation API
+    // Example with Google Translate API:
+    /*
+    const { Translate } = require('@google-cloud/translate').v2;
+    const translate = new Translate({ projectId: 'your-project-id' });
+    
+    const [translation] = await translate.translate(text, {
+      from: sourceLanguage === 'auto' ? undefined : sourceLanguage,
+      to: targetLanguage
+    });
+    
+    return translation;
+    */
+
+    return mockTranslation;
+  } catch (error) {
+    console.error('Error translating text:', error);
+    return null;
+  }
+}
+
+// Post translation to Slack
+async function postTranslation(team_id, channel, translatedText, note, thread_ts = null) {
+  try {
+    const accessToken = await getAccessToken(team_id);
+    if (!accessToken) return;
+
+    const message = {
+      channel: channel,
+      text: `🌐 ${translatedText}`,
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `🌐 ${translatedText}`
+          }
+        },
+        {
+          type: 'context',
+          elements: [
+            {
+              type: 'mrkdwn',
+              text: `_${note}_`
+            }
+          ]
+        }
+      ]
+    };
+
+    // If thread_ts is provided, reply in thread
+    if (thread_ts) {
+      message.thread_ts = thread_ts;
+    }
+
+    await axios.post('https://slack.com/api/chat.postMessage', message, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+  } catch (error) {
+    console.error('Error posting translation:', error);
+  }
+}
+
+// Get access token for a team
+async function getAccessToken(team_id) {
+  try {
+    const query = 'SELECT access_token FROM slack_installations WHERE team_id = $1';
+    const result = await pool.query(query, [team_id]);
+    
+    if (result.rows.length === 0) {
+      console.error('No access token found for team:', team_id);
+      return null;
+    }
+    
+    return result.rows[0].access_token;
+  } catch (error) {
+    console.error('Error getting access token:', error);
+    return null;
+  }
+}
 
 // Utility function to generate random state for OAuth
 function generateRandomState() {

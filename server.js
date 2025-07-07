@@ -635,7 +635,7 @@ app.post('/slack/commands/translate-config', async (req, res) => {
     const configResult = await pool.query(configQuery, [team_id, channel_id]);
     
     const currentConfig = configResult.rows[0] || {
-      translate_on_reaction: false,
+      translate_on_reaction: true,  // Default to true
       translate_on_new_message: false,
       translate_on_mention: false,
       source_language: 'auto',
@@ -681,6 +681,7 @@ app.post('/slack/commands/translate-config', async (req, res) => {
         },
         {
           type: 'section',
+          block_id: 'translate_options_block',
           text: {
             type: 'mrkdwn',
             text: 'Choose translation options:'
@@ -749,7 +750,7 @@ app.post('/slack/commands/translate-config', async (req, res) => {
     }
     
     // Return empty response since modal is opened
-    res.json({});
+    res.status(200).send();
     
   } catch (error) {
     console.error('Error in translate-config command:', error);
@@ -787,10 +788,15 @@ async function handleTranslateConfigSubmission(payload) {
     console.log('Handling translate config submission for:', { team_id, channel_id, channel_name });
     
     // Extract form values
-    const translateOptions = values.translate_options || {};
+    console.log('Form values:', JSON.stringify(values, null, 2));
     
-    // Parse selected options
-    const selectedOptions = translateOptions.translate_options?.selected_options || [];
+    // Find the translate options using the specific block_id
+    const translateOptionsBlock = values.translate_options_block || {};
+    const selectedOptions = translateOptionsBlock.translate_options?.selected_options || [];
+    
+    console.log('Translate options block:', JSON.stringify(translateOptionsBlock, null, 2));
+    console.log('Selected options:', JSON.stringify(selectedOptions, null, 2));
+    
     const config = {
       translate_on_reaction: selectedOptions.some(opt => opt.value === 'translate_on_reaction'),
       translate_on_new_message: selectedOptions.some(opt => opt.value === 'translate_on_new_message'),
@@ -798,6 +804,11 @@ async function handleTranslateConfigSubmission(payload) {
       source_language: 'auto',  // Default to auto-detect
       target_language: 'en'     // Default to English
     };
+    
+    // If no options are selected, set default to translate_on_reaction
+    if (!config.translate_on_reaction && !config.translate_on_new_message && !config.translate_on_mention) {
+      config.translate_on_reaction = true;
+    }
     
     console.log('Parsed config:', config);
     

@@ -642,6 +642,8 @@ app.post('/slack/commands/translate-config', async (req, res) => {
       target_language: 'en'
     };
     
+
+    
     // Create modal view
     const modalView = {
       type: 'modal',
@@ -681,94 +683,46 @@ app.post('/slack/commands/translate-config', async (req, res) => {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: 'Translation options:'
+            text: 'Choose translation options:'
           },
           accessory: {
             type: 'checkboxes',
             action_id: 'translate_options',
-            initial_options: [
-              ...(currentConfig.translate_on_reaction ? [{
-                text: { type: 'plain_text', text: 'Translate when reacted with 🌐' },
-                value: 'translate_on_reaction'
-              }] : []),
-              ...(currentConfig.translate_on_new_message ? [{
-                text: { type: 'plain_text', text: 'Translate all new messages' },
-                value: 'translate_on_new_message'
-              }] : []),
-              ...(currentConfig.translate_on_mention ? [{
-                text: { type: 'plain_text', text: 'Translate when bot is mentioned' },
-                value: 'translate_on_mention'
-              }] : [])
-            ],
+            ...((() => {
+              const initialOptions = [];
+              if (currentConfig.translate_on_reaction) {
+                initialOptions.push({
+                  text: { type: 'plain_text', text: 'Dịch khi react với 🌐' },
+                  value: 'translate_on_reaction'
+                });
+              }
+              if (currentConfig.translate_on_new_message) {
+                initialOptions.push({
+                  text: { type: 'plain_text', text: 'Dịch khi có tin nhắn mới' },
+                  value: 'translate_on_new_message'
+                });
+              }
+              if (currentConfig.translate_on_mention) {
+                initialOptions.push({
+                  text: { type: 'plain_text', text: 'Dịch khi được tag' },
+                  value: 'translate_on_mention'
+                });
+              }
+              return initialOptions.length > 0 ? { initial_options: initialOptions } : {};
+            })()),
             options: [
               {
-                text: { type: 'plain_text', text: 'Translate when reacted with 🌐' },
+                text: { type: 'plain_text', text: 'Dịch khi react với 🌐' },
                 value: 'translate_on_reaction'
               },
               {
-                text: { type: 'plain_text', text: 'Translate all new messages' },
+                text: { type: 'plain_text', text: 'Dịch khi có tin nhắn mới' },
                 value: 'translate_on_new_message'
               },
               {
-                text: { type: 'plain_text', text: 'Translate when bot is mentioned' },
+                text: { type: 'plain_text', text: 'Dịch khi được tag' },
                 value: 'translate_on_mention'
               }
-            ]
-          }
-        },
-        {
-          type: 'divider'
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: '*Source Language*'
-          },
-          accessory: {
-            type: 'static_select',
-            action_id: 'source_language',
-            placeholder: { type: 'plain_text', text: 'Select source language' },
-            initial_option: {
-              text: { type: 'plain_text', text: currentConfig.source_language === 'auto' ? 'Auto-detect' : currentConfig.source_language.toUpperCase() },
-              value: currentConfig.source_language
-            },
-            options: [
-              { text: { type: 'plain_text', text: 'Auto-detect' }, value: 'auto' },
-              { text: { type: 'plain_text', text: 'English' }, value: 'en' },
-              { text: { type: 'plain_text', text: 'Vietnamese' }, value: 'vi' },
-              { text: { type: 'plain_text', text: 'Japanese' }, value: 'ja' },
-              { text: { type: 'plain_text', text: 'Korean' }, value: 'ko' },
-              { text: { type: 'plain_text', text: 'Chinese' }, value: 'zh' },
-              { text: { type: 'plain_text', text: 'Spanish' }, value: 'es' },
-              { text: { type: 'plain_text', text: 'French' }, value: 'fr' },
-              { text: { type: 'plain_text', text: 'German' }, value: 'de' }
-            ]
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: '*Target Language*'
-          },
-          accessory: {
-            type: 'static_select',
-            action_id: 'target_language',
-            placeholder: { type: 'plain_text', text: 'Select target language' },
-            initial_option: {
-              text: { type: 'plain_text', text: currentConfig.target_language.toUpperCase() },
-              value: currentConfig.target_language
-            },
-            options: [
-              { text: { type: 'plain_text', text: 'English' }, value: 'en' },
-              { text: { type: 'plain_text', text: 'Vietnamese' }, value: 'vi' },
-              { text: { type: 'plain_text', text: 'Japanese' }, value: 'ja' },
-              { text: { type: 'plain_text', text: 'Korean' }, value: 'ko' },
-              { text: { type: 'plain_text', text: 'Chinese' }, value: 'zh' },
-              { text: { type: 'plain_text', text: 'Spanish' }, value: 'es' },
-              { text: { type: 'plain_text', text: 'French' }, value: 'fr' },
-              { text: { type: 'plain_text', text: 'German' }, value: 'de' }
             ]
           }
         }
@@ -782,7 +736,7 @@ app.post('/slack/commands/translate-config', async (req, res) => {
     }, {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json; charset=utf-8'
       }
     });
     
@@ -834,8 +788,6 @@ async function handleTranslateConfigSubmission(payload) {
     
     // Extract form values
     const translateOptions = values.translate_options || {};
-    const sourceLanguage = values.source_language || {};
-    const targetLanguage = values.target_language || {};
     
     // Parse selected options
     const selectedOptions = translateOptions.translate_options?.selected_options || [];
@@ -843,8 +795,8 @@ async function handleTranslateConfigSubmission(payload) {
       translate_on_reaction: selectedOptions.some(opt => opt.value === 'translate_on_reaction'),
       translate_on_new_message: selectedOptions.some(opt => opt.value === 'translate_on_new_message'),
       translate_on_mention: selectedOptions.some(opt => opt.value === 'translate_on_mention'),
-      source_language: sourceLanguage.source_language?.selected_option?.value || 'auto',
-      target_language: targetLanguage.target_language?.selected_option?.value || 'en'
+      source_language: 'auto',  // Default to auto-detect
+      target_language: 'en'     // Default to English
     };
     
     console.log('Parsed config:', config);
@@ -886,9 +838,9 @@ async function handleTranslateConfigSubmission(payload) {
       
       // Send success message to channel
       const enabledFeatures = [];
-      if (config.translate_on_reaction) enabledFeatures.push('React with 🌐');
-      if (config.translate_on_new_message) enabledFeatures.push('New messages');
-      if (config.translate_on_mention) enabledFeatures.push('Bot mentions');
+      if (config.translate_on_reaction) enabledFeatures.push('🌐 Dịch khi react');
+      if (config.translate_on_new_message) enabledFeatures.push('📝 Dịch tin nhắn mới');
+      if (config.translate_on_mention) enabledFeatures.push('🔔 Dịch khi được tag');
       
       const message = {
         channel: channel_id,
@@ -898,21 +850,15 @@ async function handleTranslateConfigSubmission(payload) {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `✅ *Translation configuration updated for #${channel_name}*`
+              text: `✅ *Cập nhật cấu hình dịch thuật cho #${channel_name}*`
             }
           },
           {
             type: 'section',
-            fields: [
-              {
-                type: 'mrkdwn',
-                text: `*Enabled features:*\n${enabledFeatures.length > 0 ? enabledFeatures.join('\n') : 'None'}`
-              },
-              {
-                type: 'mrkdwn',
-                text: `*Language settings:*\n${config.source_language === 'auto' ? 'Auto-detect' : config.source_language.toUpperCase()} → ${config.target_language.toUpperCase()}`
-              }
-            ]
+            text: {
+              type: 'mrkdwn',
+              text: `*Các tính năng đã bật:*\n${enabledFeatures.length > 0 ? enabledFeatures.join('\n') : '❌ Không có tính năng nào được bật'}`
+            }
           }
         ]
       };

@@ -634,13 +634,22 @@ app.post('/slack/commands/translate-config', async (req, res) => {
     const configQuery = 'SELECT * FROM channel_configs WHERE team_id = $1 AND channel_id = $2';
     const configResult = await pool.query(configQuery, [team_id, channel_id]);
     
-    const currentConfig = configResult.rows[0] || {
-      translate_on_reaction: true,  // Default to true
-      translate_on_new_message: false,
-      translate_on_mention: false,
-      source_language: 'auto',
-      target_language: 'en'
-    };
+    let currentConfig;
+    if (configResult.rows.length > 0) {
+      // Use existing config from database
+      currentConfig = configResult.rows[0];
+      console.log('Using existing config from DB:', currentConfig);
+    } else {
+      // Use default config for new channel
+      currentConfig = {
+        translate_on_reaction: true,  // Default to true
+        translate_on_new_message: false,
+        translate_on_mention: false,
+        source_language: 'auto',
+        target_language: 'en'
+      };
+      console.log('Using default config for new channel:', currentConfig);
+    }
     
 
     
@@ -691,6 +700,9 @@ app.post('/slack/commands/translate-config', async (req, res) => {
             action_id: 'translate_options',
             ...((() => {
               const initialOptions = [];
+              
+              console.log('Current config for modal:', currentConfig);
+              
               if (currentConfig.translate_on_reaction) {
                 initialOptions.push({
                   text: { type: 'plain_text', text: 'Dịch khi react với 🌐' },
@@ -709,6 +721,9 @@ app.post('/slack/commands/translate-config', async (req, res) => {
                   value: 'translate_on_mention'
                 });
               }
+              
+              console.log('Initial options for modal:', initialOptions);
+              
               return initialOptions.length > 0 ? { initial_options: initialOptions } : {};
             })()),
             options: [

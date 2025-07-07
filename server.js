@@ -212,10 +212,22 @@ app.get('/slack/oauth/authorize', (req, res) => {
 
   try {
     const scopes = [
+      'app_mentions:read',
+      'assistant:write',
+      'channels:history',
+      'channels:join',
       'channels:read',
       'chat:write',
+      'chat:write.customize',
+      'chat:write.public',
       'commands',
-      'incoming-webhook',
+      'groups:history',
+      'groups:read',
+      'reactions:read',
+      'reactions:write',
+      'im:history',
+      'im:read',
+      'im:write',
       'users:read'
     ].join(',');
 
@@ -322,6 +334,9 @@ app.get('/slack/oauth/callback', async (req, res) => {
       team_id: installationData.team_id,
       scopes: installationData.scope
     });
+
+    // Slash commands are automatically available after installation
+    console.log('App installed with commands scope - slash commands should be available');
 
     // Redirect to success page
     res.redirect(`${REDIRECT_URLS.SUCCESS}?team=${encodeURIComponent(data.team.name)}`);
@@ -705,19 +720,19 @@ app.post('/slack/commands/translate-config', async (req, res) => {
               
               if (currentConfig.translate_on_reaction) {
                 initialOptions.push({
-                  text: { type: 'plain_text', text: 'Dịch khi react với 🌐' },
+                  text: { type: 'plain_text', text: 'Translate when reacted with emoji' },
                   value: 'translate_on_reaction'
                 });
               }
               if (currentConfig.translate_on_new_message) {
                 initialOptions.push({
-                  text: { type: 'plain_text', text: 'Dịch khi có tin nhắn mới' },
+                  text: { type: 'plain_text', text: 'Translate all new messages' },
                   value: 'translate_on_new_message'
                 });
               }
               if (currentConfig.translate_on_mention) {
                 initialOptions.push({
-                  text: { type: 'plain_text', text: 'Dịch khi được tag' },
+                  text: { type: 'plain_text', text: 'Translate when bot is mentioned' },
                   value: 'translate_on_mention'
                 });
               }
@@ -728,15 +743,15 @@ app.post('/slack/commands/translate-config', async (req, res) => {
             })()),
             options: [
               {
-                text: { type: 'plain_text', text: 'Dịch khi react với 🌐' },
+                text: { type: 'plain_text', text: 'Translate when reacted with emoji' },
                 value: 'translate_on_reaction'
               },
               {
-                text: { type: 'plain_text', text: 'Dịch khi có tin nhắn mới' },
+                text: { type: 'plain_text', text: 'Translate all new messages' },
                 value: 'translate_on_new_message'
               },
               {
-                text: { type: 'plain_text', text: 'Dịch khi được tag' },
+                text: { type: 'plain_text', text: 'Translate when bot is mentioned' },
                 value: 'translate_on_mention'
               }
             ]
@@ -864,30 +879,30 @@ async function handleTranslateConfigSubmission(payload) {
       
       // Send success message to channel
       const enabledFeatures = [];
-      if (config.translate_on_reaction) enabledFeatures.push('🌐 Dịch khi react');
-      if (config.translate_on_new_message) enabledFeatures.push('📝 Dịch tin nhắn mới');
-      if (config.translate_on_mention) enabledFeatures.push('🔔 Dịch khi được tag');
+      if (config.translate_on_reaction) enabledFeatures.push('🌐 Translate when reacted with emoji');
+      if (config.translate_on_new_message) enabledFeatures.push('📝 Translate when new messages');
+      if (config.translate_on_mention) enabledFeatures.push('🔔 Translate when mentioned');
       
-      const message = {
-        channel: channel_id,
-        text: `✅ Translation configuration updated for #${channel_name}`,
-        blocks: [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `✅ *Cập nhật cấu hình dịch thuật cho #${channel_name}*`
+              const message = {
+          channel: channel_id,
+          text: `✅ Translation configuration updated for #${channel_name}`,
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `✅ *Translation configuration updated for #${channel_name}*`
+              }
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*Enabled features:*\n${enabledFeatures.length > 0 ? enabledFeatures.join('\n') : '❌ No features enabled'}`
+              }
             }
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Các tính năng đã bật:*\n${enabledFeatures.length > 0 ? enabledFeatures.join('\n') : '❌ Không có tính năng nào được bật'}`
-            }
-          }
-        ]
-      };
+          ]
+        };
       
       await axios.post('https://slack.com/api/chat.postMessage', message, {
         headers: {
